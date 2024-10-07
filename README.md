@@ -20,3 +20,4 @@ const kmlContent = fs.readFileSync('./my-file.kml', 'utf-8');
 const { folders, geojson } = kmlToGeojson.parse(kmlContent);
 
 ```
+### Original typescript code left for historic purposes. 
