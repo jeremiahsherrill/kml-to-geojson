@@ -1,23 +1,16 @@
 {
   "name": "kml-to-geojson",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Convert KML content to GeoJSON, preserving style and folder data",
   "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "scripts": {
-    "watch": "tsc --watch",
-    "build": "tsc",
-    "start": "node lib/index"
+    "start": "node lib/index.js"
   },
   "author": "Kyle Rummens",
+  "contributors": [
+    "Jeremiah Sherrill"
+  ],
   "license": "MIT",
-  "devDependencies": {
-    "@types/geojson": "^7946.0.10",
-    "@types/node": "^18.11.18",
-    "@types/xmldom": "^0.1.31",
-    "ts-node": "^10.9.1",
-    "tsconfig-paths": "^4.1.2"
-  },
   "dependencies": {
     "@xmldom/xmldom": "^0.8.7"
   },
