@@ -3,7 +3,9 @@
   "version": "1.0.15",
   "description": "Convert KML content to GeoJSON, preserving style and folder data",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
+    "build": "tsc",
     "start": "node lib/index.js"
   },
   "author": "Kyle Rummens",
@@ -20,5 +22,10 @@
   },
   "files": [
     "lib/**/*"
-  ]
+  ],
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^26.4.0",
+    "typescript": "^5.9.3"
+  }
 }

@@ -1,5 +1,5 @@
 import { Feature, GeoJsonProperties, Point, LineString, Polygon } from 'geojson';
-import { DOMParser } from 'xmldom';
+import { DOMParser } from '@xmldom/xmldom';
 const crypto = require('crypto');
 
 export interface KmlFolder {
@@ -71,7 +71,7 @@ export class KmlToGeojson {
         let color, opacity: any;
         v = v || '';
         if (v.substr(0, 1) === '#') { v = v.substr(1); }
-        if (v.length === 6 || v.length === 3) { color = v; }
+        if (v.length === 6 || v.length === 3) { color = '#' + v; }
         if (v.length === 8) {
             opacity = parseInt(v.substr(0, 2), 16) / 255;
             color = '#' + v.substr(6, 2) +
@@ -79,6 +79,36 @@ export class KmlToGeojson {
                 v.substr(2, 2);
         }
         return { color, opacity: isNaN(opacity) ? undefined : opacity };
+    }
+
+    // KML separates coordinate tuples with any whitespace (spaces, tabs, newlines)
+    private readonly parseCoordinatesText = (text_content: string): number[][] => {
+        return text_content
+            .trim()
+            .split(/\s+/)
+            .map(coordinate => {
+                const split = coordinate.trim().split(',');
+                const longitude = parseFloat(split[0]);
+                const latitude = parseFloat(split[1]);
+                const altitude = split.length > 2 ? parseFloat(split[2]) : 0;
+
+                const arr = [longitude, latitude];
+                if (this.include_altitude) arr.push(altitude);
+
+                return arr;
+            });
+    }
+
+    // GeoJSON requires linear rings to end where they start
+    private readonly closeRing = (ring: number[][]): number[][] => {
+        if (ring.length >= 3) {
+            const first = ring[0];
+            const last = ring[ring.length - 1];
+            if (!(first.length === last.length && first.every((v, i) => v === last[i]))) {
+                ring.push([...first]);
+            }
+        }
+        return ring;
     }
 
     private readonly parsePlacemark = (node: Element, styles: any[], style_maps: any[], folder_id: string | null) => {
@@ -94,49 +124,45 @@ export class KmlToGeojson {
 
         const geometries = [];
 
-        const getCoordinates = (node: Element, geometry_type: 'Point' | 'LineString' | 'Polygon') => {
-            const coordinates_node = this.get1(node, 'coordinates')!;
-            const text_content = coordinates_node.textContent!;
+        const getCoordinates = (node: Element, geometry_type: 'Point' | 'LineString' | 'Polygon'): number[] | number[][] | number[][][] | null => {
+            if (geometry_type === 'Point' || geometry_type === 'LineString') {
+                const coordinates_node = this.get1(node, 'coordinates');
+                if (!coordinates_node?.textContent?.trim()) return null;
 
-            if (geometry_type === 'Point') {
-                const split = text_content.split(',');
-                const longitude = parseFloat(split[0]);
-                const latitude = parseFloat(split[1]);
-                const altitude = split.length > 2 ? parseFloat(split[2]) : 0;
-
-                const arr = [longitude, latitude];
-                if (this.include_altitude) arr.push(altitude);
-
-                return arr;
-            }
-            else if (geometry_type === 'LineString' || geometry_type === 'Polygon') {
-                const splits = text_content.trim().split(' ');
-
-                return splits.map(coordinate => {
-                    const split = coordinate.trim().split(',');
-                    const longitude = parseFloat(split[0]);
-                    const latitude = parseFloat(split[1]);
-                    const altitude = split.length > 2 ? parseFloat(split[2]) : 0;
-
-                    const arr = [longitude, latitude];
-                    if (this.include_altitude) arr.push(altitude);
-
-                    return arr
-                });
+                const positions = this.parseCoordinatesText(coordinates_node.textContent);
+                return geometry_type === 'Point' ? positions[0] ?? null : positions;
             }
 
+            if (geometry_type === 'Polygon') {
+                // GeoJSON polygon coordinates are an array of linear rings:
+                // the outer boundary first, followed by any holes
+                const rings: number[][][] = [];
 
-            const arr = [0, 0];
-            if (this.include_altitude) arr.push(0);
+                const outer_node = this.get1(node, 'outerBoundaryIs');
+                const outer_coordinates = outer_node
+                    ? this.get1(outer_node, 'coordinates')
+                    : this.get1(node, 'coordinates');
+                if (!outer_coordinates?.textContent?.trim()) return null;
+                rings.push(this.closeRing(this.parseCoordinatesText(outer_coordinates.textContent)));
 
-            return arr;
+                for (const inner_node of this.get(node, 'innerBoundaryIs')) {
+                    const inner_coordinates = this.get1(inner_node, 'coordinates');
+                    if (inner_coordinates?.textContent?.trim()) {
+                        rings.push(this.closeRing(this.parseCoordinatesText(inner_coordinates.textContent)));
+                    }
+                }
+
+                return rings;
+            }
+
+            return null;
         }
 
         for (const point of point_nodes) {
             const geometry_type = 'Point';
 
             const coordinates = getCoordinates(point, geometry_type);
-            if (!this.geometryIsValid(coordinates)) continue;
+            if (!coordinates || !this.geometryIsValid(coordinates)) continue;
 
             const properties: any = {
                 name: name_node?.textContent ?? '',
@@ -198,7 +224,7 @@ export class KmlToGeojson {
             const geometry_type = 'LineString';
 
             const coordinates = getCoordinates(linestring, geometry_type);
-            if (!this.geometryIsValid(coordinates)) continue;
+            if (!coordinates || !this.geometryIsValid(coordinates)) continue;
 
             const properties: any = {
                 name: name_node?.textContent ?? '',
@@ -260,7 +286,7 @@ export class KmlToGeojson {
             const geometry_type = 'Polygon';
 
             const coordinates = getCoordinates(polygon, geometry_type);
-            if (!this.geometryIsValid(coordinates)) continue;
+            if (!coordinates || !this.geometryIsValid(coordinates)) continue;
 
             const properties: any = {
                 name: name_node?.textContent ?? '',
@@ -333,26 +359,24 @@ export class KmlToGeojson {
         }
     }
 
-    private geometryIsValid(coordinates: number[] | number[][]) {
+    private geometryIsValid(coordinates: number[] | number[][] | number[][][]) {
+        const valid = this.coordinatesAreValid(coordinates);
+        if (!valid) {
+            console.log('[kml-to-geojson] Geometry is invalid: ');
+            console.log(JSON.stringify(coordinates));
+        }
+        return valid;
+    }
+
+    private coordinatesAreValid(coordinates: any[]): boolean {
+        if (coordinates.length === 0) return false;
         for (const item of coordinates) {
             if (Array.isArray(item)) {
-                for (const item2 of item) {
-                    if (isNaN(item2)) {
-                        console.log('[kml-to-geojson] Geometry is invalid: ');
-                        console.log(JSON.stringify(coordinates));
-                        return false;
-                    }
-                }
-            }
-            else {
-                if (isNaN(item)) {
-                    console.log('[kml-to-geojson] Geometry is invalid: ');
-                    console.log(JSON.stringify(coordinates));
-                    return false;
-                }
+                if (!this.coordinatesAreValid(item)) return false;
+            } else if (typeof item !== 'number' || isNaN(item)) {
+                return false;
             }
         }
-
         return true;
     }
 
@@ -569,13 +593,16 @@ export class KmlToGeojson {
 
     public readonly parse = <T extends GeoJsonProperties = GeoJsonProperties>(kml_content: string): {
         folders: KmlFolder[],
-        geojson: KmlGeojson
+        geojson: KmlGeojson<T>
     } => {
-        const folders: any[] = [];
+        const folders: KmlFolder[] = [];
         const placemarks: any[] = [];
 
         const dom = new DOMParser().parseFromString(kml_content);
-        const kml_node = this.get1(dom as any as Element, 'kml')!;
+        const kml_node = this.get1(dom as any as Element, 'kml');
+        if (!kml_node) {
+            throw new Error('[kml-to-geojson] Invalid KML: no <kml> root element found');
+        }
 
         const { styles, style_maps } = this.parseStyles(kml_node);
 
@@ -595,7 +622,10 @@ export class KmlToGeojson {
         on_geometry: (geometry: KmlFeature<T>) => (any | void | Promise<any> | Promise<void>)) => {
 
         const dom = new DOMParser().parseFromString(kml_content);
-        const kml_node = this.get1(dom as any as Element, 'kml')!;
+        const kml_node = this.get1(dom as any as Element, 'kml');
+        if (!kml_node) {
+            throw new Error('[kml-to-geojson] Invalid KML: no <kml> root element found');
+        }
 
         const { styles, style_maps } = this.parseStyles(kml_node);
 
